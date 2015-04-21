@@ -1,0 +1,3 @@
+#!/bin/bash -ue
+
+`dirname ${BASH_SOURCE}`/git-bottle -u "$@"

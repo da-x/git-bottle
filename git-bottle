@@ -1,0 +1,151 @@
+#!/bin/bash -ue
+
+# Utility functions
+cur_tree() {
+    git show --format="%T" -s
+}
+
+# find normalization script
+NORMALIZATION_SCRIPT=git-unmerged-normalization
+set +e
+which ${NORMALIZATION_SCRIPT} 2>/dev/null 1>/dev/null
+if [ "0" != "$?" ] ; then
+    set -e
+    NORMALIZATION_SCRIPT=`dirname ${BASH_SOURCE}`/${NORMALIZATION_SCRIPT}
+else
+    set -e
+    NORMALIZATION_SCRIPT=`which ${NORMALIZATION_SCRIPT}`
+fi
+
+if [ ! -x ${NORMALIZATION_SCRIPT} ] ; then
+    echo ${NORMALIZATION_SCRIPT} not found
+    exit -1
+fi
+
+bottle() {
+    # Turn unmerged paths into a commit. Unless we do this
+    # git likes to complain about the state of the index. It's
+    # normallization 'normallization' of the index.
+
+    ${NORMALIZATION_SCRIPT} encode
+
+    git_top=`git rev-parse --show-toplevel`/.git
+
+    # Turn staged files into a commit
+    tree=`cur_tree`
+    git commit -m "GIT_BOTTLE_STATE: staged" --allow-empty > /dev/null
+    if [ "${tree}" == "`cur_tree`" ] ; then
+	# Remove empty commit
+	git reset --soft HEAD^
+    else
+	echo "git-bottle: commit created - staged changes"
+    fi
+
+    # Turn modified but unadded files into a commit
+    tree=`cur_tree`
+    git commit -a -m "GIT_BOTTLE_STATE: uncommitted" --allow-empty > /dev/null
+    if [ "${tree}" == "`cur_tree`" ] ; then
+	# Remove empty commit
+	git reset --soft HEAD^
+    else
+	echo "git-bottle: commit created - unstaged changes to tracked files"
+    fi
+
+    # Turn untracked but not ignored files a commit
+    tree=`cur_tree`
+    git add -A .
+    git commit -m "GIT_BOTTLE_STATE: untracked" --allow-empty > /dev/null
+    if [ "${tree}" == "`cur_tree`" ] ; then
+	# Remove empty commit
+	git reset --soft HEAD^
+    else
+	echo "git-bottle: commit created - untracked files"
+    fi
+
+    commit_special_state() {
+	state=$1
+	branch=`cat ${git_top}/${state}/head-name`
+	branch=${branch#refs/heads/}
+	gitversion=`git --version`
+
+	echo Detected ${state}
+	mv ${git_top}/${state} .GIT-BOTTLE-STATE-${state}
+
+	git add -f .GIT-BOTTLE-STATE-${state}
+
+	echo -e "GIT_BOTTLE_STATE: ${state}\n" > ${git_top}/TEMP_MSG
+	echo "Branch: ${branch}" >> ${git_top}/TEMP_MSG
+	echo "Git-Version: ${gitversion}" >> ${git_top}/TEMP_MSG
+
+	git commit -F ${git_top}/TEMP_MSG --allow-empty
+	rm -f ${git_top}/TEMP_MSG
+	rev=$(git rev-parse HEAD)
+	git checkout ${branch} 2>/dev/null >/dev/null
+	git reset --hard ${rev}
+    }
+
+    # Turn various special states into a commit
+    if [[ -f ${git_top}/rebase-merge/head-name ]] ; then
+	commit_special_state rebase-merge
+    elif [[ -f ${git_top}/rebase-apply/head-name ]] ; then
+	commit_special_state rebase-apply
+    fi
+}
+
+unbottle() {
+    git_top=`git rev-parse --show-toplevel`/.git
+
+    subj=`git show HEAD --format="%s" -s`
+    if [ "${subj}" == "GIT_BOTTLE_STATE: rebase-merge" ] ; then
+	echo Detected rebase-merge
+	git checkout `git rev-parse HEAD` 2>/dev/null
+	git reset --soft HEAD^
+	git reset HEAD .
+	mv .GIT-BOTTLE-STATE-rebase-merge ${git_top}/rebase-merge
+    elif [ "${subj}" == "GIT_BOTTLE_STATE: rebase-apply" ] ; then
+	echo Detected rebase-apply
+	git checkout `git rev-parse HEAD` 2>/dev/null
+	git reset --soft HEAD^
+	git reset HEAD .
+	mv .GIT-BOTTLE-STATE-rebase-apply ${git_top}/rebase-apply
+    fi
+
+    subj=`git show HEAD --format="%s" -s`
+    if [ "${subj}" == "GIT_BOTTLE_STATE: untracked" ] ; then
+	git reset --soft HEAD^
+	git reset HEAD .
+    fi
+
+    subj=`git show HEAD --format="%s" -s`
+    if [ "${subj}" == "GIT_BOTTLE_STATE: uncommitted" ] ; then
+	git reset --soft HEAD^
+	git reset HEAD .
+    fi
+
+    subj=`git show HEAD --format="%s" -s`
+    if [ "${subj}" == "GIT_BOTTLE_STATE: staged" ] ; then
+	git reset --soft HEAD^
+    fi
+
+    ${NORMALIZATION_SCRIPT} decode
+}
+
+cmd=bottle
+
+while getopts "uh" opt; do
+    case $opt in
+	u)
+	    cmd=unbottle
+	    ;;
+	h)
+	    echo "${BASH_SOURCE} [-u]"
+	    exit 1
+	    ;;
+	\?)
+	    echo "invalid option ${opt}"
+	    exit 1
+	    ;;
+    esac
+done
+
+${cmd} "$@"

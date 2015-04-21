@@ -1,0 +1,228 @@
+#!/usr/bin/env python2
+
+import os
+import sys
+import re
+import shutil
+
+SPECIAL_SUFFIX1 = "GIT_BOTTLE_UNMERGED_NORMALIZED"
+SPECIAL_SUFFIX2 = "GIT_BOTTLE_UNMERGED_CHECKOUT"
+SPECIAL_SUFFIX3 = "GIT_BOTTLE_UNMERGED_UNTRACKED"
+SPECIAL_SUFFIX4 = "GIT_BOTTLE_UNMERGED_UNCOMMITED"
+SPECIAL_FILENAME_MERGE_HEAD = ".GIT_BOTTLE_MERGE_HEAD"
+SPECIAL_FILENAME_MERGE_MSG = ".GIT_BOTTLE_MERGE_MSG"
+SPECIAL_FILENAME_MERGE_MODE = ".GIT_BOTTLE_MERGE_MODE"
+SPECIAL_MERGE_COMMIT_PREFIX = "GIT_BOTTLE_STATE_MERGE: "
+
+def update_index(updates):
+    p = os.popen('git update-index --index-info', 'w')
+    data = '\n'.join(updates)
+    p.write(data)
+    r = p.close()
+    if r != None:
+        print >>sys.stderr, "git-update-index failed"
+        sys.exit(r)
+
+def add(lst):
+    params = ['git', 'add', '--'] + list(lst)
+    r = os.spawnvp(os.P_WAIT, 'git', params)
+    if r != 0:
+        print >>sys.stderr, "git-add failed (%d)" % (r, )
+        sys.exit(r)
+
+def remove(lst):
+    params = ['git', 'rm', '-f', '--'] + list(lst)
+    r = os.spawnvp(os.P_WAIT, 'git', params)
+    if r != 0:
+        print >>sys.stderr, "git-add failed (%d)" % (r, )
+        sys.exit(r)
+
+def checkout(files, params=None):
+    if not params:
+        params = []
+    else:
+        params = params
+    params = ['git', 'checkout'] + params + ['--'] + list(files)
+    r = os.spawnvp(os.P_WAIT, 'git', params)
+    if r != 0:
+        print >>sys.stderr, "git-checkout failed (%d)" % (r, )
+        sys.exit(r)
+
+def reset(files, params=None):
+    if not params:
+        params = []
+    else:
+        params = params
+    params = ['git', 'reset'] + params + ['--'] + list(files)
+    r = os.spawnvp(os.P_WAIT, 'git', params)
+    if r != 0:
+        print >>sys.stderr, "git-reset failed (%d)" % (r, )
+        sys.exit(r)
+
+def save_unstaged_changes_files(unmerged_filenames):
+    def move_modified(suffix):
+        lst = []
+        files_to_checkout = []
+        for line in os.popen('git status --porcelain').read().splitlines():
+            if line[1] == 'M':
+                filename = line[3:]
+                filename_temp = filename + '.' + suffix
+                os.rename(filename, filename_temp)
+                files_to_checkout.append(filename)
+                lst.append((filename_temp, filename))
+        if files_to_checkout:
+            checkout(files_to_checkout)
+        return lst
+
+    lst = move_modified(SPECIAL_SUFFIX3)
+
+    files_to_reset = []
+    for line in os.popen('git status --porcelain').read().splitlines():
+        if line[0:2] == 'M ':
+            filename = line[3:]
+            if filename not in unmerged_filenames:
+                files_to_reset.append(filename)
+    if files_to_reset:
+        reset(files_to_reset)
+
+    lst2 = move_modified(SPECIAL_SUFFIX4)
+
+    return (lst, lst2)
+
+def encode():
+    """Turn the unmerged paths, if exist, to a commit (or a merge commit)"""
+    updates = []
+    unmerged_filenames = set({})
+    unmerged_bogus_filenames = set()
+
+    for line in os.popen('git ls-files --unmerged').read().splitlines():
+        meta, filename = line.split('\t')
+        mode, sha1hash, stage = meta.split(' ')
+        if stage != "0":
+            unmerged_filenames.add(filename)
+        bogus_filename = filename + ".%s.%s" % (stage, SPECIAL_SUFFIX1)
+        unmerged_bogus_filenames.add(bogus_filename)
+        updates += ["%s %s 0\t%s" % (mode, sha1hash, bogus_filename)]
+
+    if not updates:
+        return
+
+    update_index(updates)
+    add(unmerged_filenames)
+    checkout(unmerged_bogus_filenames)
+
+    modified_list = []
+    staged_list = []
+    if os.path.exists(".git/MERGE_MODE"):
+        # For MERGE_MODE, git won't let us do partial merges, so we need
+        # to save aside all modified files that were not stage. Otheriwse,
+        # we get 'fatal: cannot do a partial commit during a merge.'
+
+        modified_list, staged_list = save_unstaged_changes_files(unmerged_filenames)
+
+        shutil.copy(".git/MERGE_HEAD", SPECIAL_FILENAME_MERGE_HEAD)
+        shutil.copy(".git/MERGE_MSG", SPECIAL_FILENAME_MERGE_MSG)
+        shutil.copy(".git/MERGE_MODE", SPECIAL_FILENAME_MERGE_MODE)
+
+        add([SPECIAL_FILENAME_MERGE_HEAD,
+             SPECIAL_FILENAME_MERGE_MSG,
+             SPECIAL_FILENAME_MERGE_MODE])
+
+        content = SPECIAL_MERGE_COMMIT_PREFIX + open(".git/MERGE_MSG").read()
+        f = open(".git/MERGE_MSG", "w")
+        f.write(content)
+        f.close()
+
+        params = ['git', 'commit', '-a', '--no-edit']
+    else:
+        params = ['git', 'commit', '-m', "GIT_BOTTLE_STATE: unmerged-paths-normalization",
+                  '--'] + (list(unmerged_bogus_filenames) +
+                           list(unmerged_filenames))
+
+    r = os.spawnvp(os.P_WAIT, 'git', params)
+    if staged_list:
+        lst = []
+        for filename_temp, filename in staged_list:
+            os.rename(filename_temp, filename)
+            lst += [filename]
+        add(lst)
+
+    for filename_temp, filename in modified_list:
+        os.rename(filename_temp, filename)
+
+    if r != 0:
+        print >>sys.stderr, "git-commit failed (%d)" % (r, )
+        sys.exit(r)
+
+def decode():
+    """Turn a special 'unmerged paths' commit back to unmerged files in index"""
+    rev = os.popen('git rev-parse HEAD').read().strip()
+
+    cmd = os.popen('git show HEAD --format="%s" -s').read().strip()
+
+    merge_commit = False
+    if cmd != "GIT_BOTTLE_STATE: unmerged-paths-normalization":
+        if cmd.startswith(SPECIAL_MERGE_COMMIT_PREFIX):
+            merge_commit = True
+        else:
+            return
+
+    params = ['git', 'reset', '--soft' ,'HEAD^']
+    r = os.spawnvp(os.P_WAIT, 'git', params)
+    if r != 0:
+        print >>sys.stderr, "git-reset failed (%d)" % (r, )
+        sys.exit(r)
+
+    r = re.compile("(.*)[.]([0-9]+)[.]" + SPECIAL_SUFFIX1 + '$')
+    lines = os.popen('git ls-files --stage').read().splitlines()
+    unmerged_paths = set()
+    removals = set()
+    updates = []
+    for line in lines:
+        meta, filename = line.split('\t')
+        mode, sha1hash, _ = meta.split(' ')
+        m = r.match(filename)
+        if not m:
+            continue
+
+        removals.add(filename)
+        filename, stage = m.groups(0)
+        updates += ["%s %s %s\t%s" % (mode, sha1hash, stage, filename)]
+        unmerged_paths.add(filename)
+
+    checkouts = []
+    for line in lines:
+        meta, filename = line.split('\t')
+        mode, sha1hash, stage = meta.split(' ')
+        if filename in unmerged_paths:
+            checkouts += [filename]
+            os.rename(filename, filename + SPECIAL_SUFFIX2)
+            removals.add(filename)
+
+    remove(removals)
+    update_index(updates)
+    for filename in checkouts:
+        os.rename(filename + SPECIAL_SUFFIX2, filename)
+
+    if merge_commit:
+        # Restore the merge state
+        reset([SPECIAL_FILENAME_MERGE_HEAD,
+               SPECIAL_FILENAME_MERGE_MSG,
+               SPECIAL_FILENAME_MERGE_MODE])
+        os.rename(SPECIAL_FILENAME_MERGE_HEAD, ".git/MERGE_HEAD")
+        os.rename(SPECIAL_FILENAME_MERGE_MSG, ".git/MERGE_MSG")
+        os.rename(SPECIAL_FILENAME_MERGE_MODE, ".git/MERGE_MODE")
+
+def main():
+    top_dir = os.popen('git rev-parse --show-toplevel').read().strip()
+    os.chdir(top_dir)
+
+    if sys.argv[1:] == ["encode"]:
+        encode()
+    elif sys.argv[1:] == ["decode"]:
+        decode()
+    else:
+        pass
+
+if __name__ == '__main__':
+    main()

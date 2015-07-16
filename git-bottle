@@ -112,13 +112,17 @@ unbottle() {
     subj=`git show HEAD --format="%s" -s`
     if [ "${subj}" == "GIT_BOTTLE_STATE: rebase-merge" ] ; then
 	echo Detected rebase-merge
-	git checkout `git rev-parse HEAD` 2>/dev/null
+	commit=`git rev-parse HEAD`
+	git reset --hard `cat .GIT-BOTTLE-STATE-rebase-merge/orig-head`
+	git checkout ${commit} 2>/dev/null
 	git reset --soft HEAD^
 	git reset HEAD .
 	mv .GIT-BOTTLE-STATE-rebase-merge ${git_top}/rebase-merge
     elif [ "${subj}" == "GIT_BOTTLE_STATE: rebase-apply" ] ; then
 	echo Detected rebase-apply
-	git checkout `git rev-parse HEAD` 2>/dev/null
+	commit=`git rev-parse HEAD`
+	git reset --hard `cat .GIT-BOTTLE-STATE-rebase-apply/orig-head`
+	git checkout ${commit} 2>/dev/null
 	git reset --soft HEAD^
 	git reset HEAD .
 	mv .GIT-BOTTLE-STATE-rebase-apply ${git_top}/rebase-apply

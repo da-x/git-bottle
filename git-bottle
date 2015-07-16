@@ -1,4 +1,7 @@
-#!/bin/bash -ue
+#!/bin/bash
+
+set -u
+set -e
 
 # Utility functions
 cur_tree() {
@@ -22,14 +25,24 @@ if [ ! -x ${NORMALIZATION_SCRIPT} ] ; then
     exit -1
 fi
 
+check-state() {
+    if [[ -f ${1}/rebase-merge/head-name ]] ; then
+        if [ ! -e .git/rebase-merge/stopped-sha ] ; then
+            echo "Rebase is not in a stopped state, aborting "
+            exit -1
+        fi
+    fi
+}
+
 bottle() {
+    git_top=`git rev-parse --show-toplevel`/.git
+    check-state ${git_top}
+
     # Turn unmerged paths into a commit. Unless we do this
     # git likes to complain about the state of the index. It's
     # normallization 'normallization' of the index.
 
     ${NORMALIZATION_SCRIPT} encode
-
-    git_top=`git rev-parse --show-toplevel`/.git
 
     # Turn staged files into a commit
     tree=`cur_tree`
@@ -94,6 +107,7 @@ bottle() {
 
 unbottle() {
     git_top=`git rev-parse --show-toplevel`/.git
+    check-state ${git_top}
 
     subj=`git show HEAD --format="%s" -s`
     if [ "${subj}" == "GIT_BOTTLE_STATE: rebase-merge" ] ; then

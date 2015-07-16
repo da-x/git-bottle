@@ -66,8 +66,9 @@ git commit -a -m "Another Non-conflicting change"
 
 git fetch
 
-# Test rebase interactive with conflicts
-#---------------------------------------
+echo Test rebase interactive with conflicts
+echo ---------------------------------------
+
 GIT_EDITOR=true git rebase -i origin/master || true
 diff -urN ../c . > /tmp/x || true
 
@@ -82,8 +83,9 @@ git-unbottle
 # we left in git-bottle.
 git rebase --abort
 
-# Test rebase non-interactive with conflicts
-#---------------------------------------
+echo Test rebase non-interactive with conflicts
+echo ---------------------------------------
+
 GIT_EDITOR=true git rebase origin/master || true
 diff -urN ../c . > /tmp/x || true
 
@@ -98,8 +100,8 @@ git-unbottle
 # we left in git-bottle.
 git rebase --abort
 
-# Test handling a git merge
-#---------------------------------------
+echo  Test handling a git merge
+echo ---------------------------------------
 GIT_EDITOR=true git merge origin/master || true
 diff -urN ../c . > /tmp/x || true
 

@@ -1,0 +1,1 @@
+ * When running in subdirecotry, it ignores untracked files in other dirs - risky.

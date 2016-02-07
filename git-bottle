@@ -25,12 +25,27 @@ if [ ! -x ${NORMALIZATION_SCRIPT} ] ; then
     exit -1
 fi
 
+force=0
+was_forced=0
+
 check-state() {
+    local stopped_state=0
     if [[ -f ${1}/rebase-merge/head-name ]] ; then
         if [ ! -e .git/rebase-merge/stopped-sha ] ; then
-            echo "Rebase is not in a stopped state, aborting "
-            exit -1
+	    stopped_state=1
         fi
+    fi
+
+    if [ "x$force" == "x1" ] ; then
+	if [ "x$stopped_state" == "x1" ] ; then
+	    was_forced=1
+	fi
+	return
+    fi
+
+    if [ "x$stopped_state" == "x1" ] ; then
+	echo "Rebase is not in a stopped state, aborting "
+	exit -1
     fi
 }
 
@@ -88,6 +103,9 @@ bottle() {
 
 	echo -e "GIT_BOTTLE_STATE: ${state}\n" > ${git_top}/TEMP_MSG
 	echo "Branch: ${branch}" >> ${git_top}/TEMP_MSG
+	if [ "x$was_forced" == "x1" ] ; then
+	    echo "Forced: true" >> ${git_top}/TEMP_MSG
+	fi
 	echo "Git-Version: ${gitversion}" >> ${git_top}/TEMP_MSG
 
 	git commit -F ${git_top}/TEMP_MSG --allow-empty
@@ -150,10 +168,13 @@ unbottle() {
 
 cmd=bottle
 
-while getopts "uh" opt; do
+while getopts "uhf" opt; do
     case $opt in
 	u)
 	    cmd=unbottle
+	    ;;
+	f)
+	    force=1
 	    ;;
 	h)
 	    echo "${BASH_SOURCE} [-u]"

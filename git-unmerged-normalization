@@ -24,7 +24,7 @@ def update_index(updates):
         sys.exit(r)
 
 def add(lst):
-    params = ['git', 'add', '--'] + list(lst)
+    params = ['git', 'add', '-f', '--'] + list(lst)
     r = os.spawnvp(os.P_WAIT, 'git', params)
     if r != 0:
         print >>sys.stderr, "git-add failed (%d)" % (r, )
